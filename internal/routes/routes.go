@@ -5,6 +5,7 @@ import (
 	"whatsapp-crm/internal/controllers"
 	"whatsapp-crm/internal/middlewares"
 	"whatsapp-crm/internal/services"
+	"whatsapp-crm/internal/storage"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/go-redis/redis/v8"
@@ -22,6 +23,18 @@ func Setup(app *fiber.App, db *gorm.DB, rdb *redis.Client, cfg *config.Config) {
 	conversationSvc := services.NewConversationService(db)
 	messageSvc := services.NewMessageService(db, cfg)
 
+	// Storage factory
+	var store storage.Storage
+	switch cfg.StorageDriver {
+	case "s3":
+		if s3, err := storage.NewS3Storage(cfg.AWSRegion, cfg.AWSS3Bucket, cfg.AWSS3Prefix, cfg.AWSAccessKeyID, cfg.AWSSecretAccessKey); err == nil { store = s3 }
+	case "gcs":
+		if gcs, err := storage.NewGCSStorage(app.Context(), cfg.GCSBucket, cfg.GCSPrefix, cfg.GCredentialsPath); err == nil { store = gcs }
+	default:
+		store = storage.NewLocalStorage(cfg.UploadPath, cfg.PublicBaseURL)
+	}
+	mediaUploader := services.NewMediaUploader(store, cfg)
+
 	// Controllers
 	authCtl := controllers.NewAuthController(db)
 	userCtl := controllers.NewUserController(db)
@@ -29,6 +42,7 @@ func Setup(app *fiber.App, db *gorm.DB, rdb *redis.Client, cfg *config.Config) {
 	conversationCtl := controllers.NewConversationController(db, conversationSvc, messageSvc)
 	messageCtl := controllers.NewMessageController(db, messageSvc)
 	webhookCtl := controllers.NewWebhookController(db, cfg, messageSvc, customerSvc, conversationSvc)
+	uploadCtl := controllers.NewUploadController(db, mediaUploader)
 
 	// Auth
 	auth := api.Group("/auth")
@@ -70,7 +84,11 @@ func Setup(app *fiber.App, db *gorm.DB, rdb *redis.Client, cfg *config.Config) {
 	msgs.Post("/conversation/:id/media", messageCtl.SendMedia)
 	msgs.Post("/conversation/:id/template", messageCtl.SendTemplate)
 
-	// Webhook (note: user asked to hold execution usage; routes exist but you can disable mount if needed)
+	// Upload (multipart upload then send)
+	upl := api.Group("/messages", authMw.RequireAuth)
+	upl.Post("/conversation/:id/upload", uploadCtl.UploadAndSend)
+
+	// Webhook
 	webhook := api.Group("/webhook")
 	webhook.Get("/whatsapp", webhookCtl.VerifyWebhook)
 	webhook.Post("/whatsapp", webhookCtl.HandleWebhook)

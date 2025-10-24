@@ -42,7 +42,7 @@ func Setup(app *fiber.App, db *gorm.DB, rdb *redis.Client, cfg *config.Config) {
 	conversationCtl := controllers.NewConversationController(db, conversationSvc, messageSvc)
 	messageCtl := controllers.NewMessageController(db, messageSvc)
 	webhookCtl := controllers.NewWebhookController(db, cfg, messageSvc, customerSvc, conversationSvc)
-	uploadCtl := controllers.NewUploadController(db, mediaUploader)
+	uploadCtl := controllers.NewUploadController(db, mediaUploader, cfg)
 
 	// Auth
 	auth := api.Group("/auth")
